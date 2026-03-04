@@ -168,6 +168,22 @@ app.get("/mcp", async (req, res) => {
   await transports[sessionId].handleRequest(req, res);
 });
 
+// Simple REST endpoint for hooks (no MCP session needed)
+app.post("/notify", async (req, res) => {
+  try {
+    const { message, agentName = "Claude Code", type = "info" } = req.body;
+    if (!message) {
+      res.status(400).json({ error: "message is required" });
+      return;
+    }
+    await slack.postNotification(agentName, message, type);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Error sending notification:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.delete("/mcp", async (req, res) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
   if (!sessionId || !transports[sessionId]) {

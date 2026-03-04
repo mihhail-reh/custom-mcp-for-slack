@@ -100,7 +100,74 @@ You MUST use the `slack-notifier` MCP tools to notify the user in the following 
 Keep notification messages concise — a single sentence summarizing the status and what (if anything) is needed from the user.
 ```
 
-This ensures **every** Claude Code session (terminal, IDE, background agents) will send you Slack notifications.
+This ensures Claude Code sessions will send you contextual Slack notifications mid-conversation.
+
+#### c) Add a Stop hook for guaranteed notifications
+
+The CLAUDE.md instructions rely on the model choosing to notify — which works most of the time but isn't 100% guaranteed. For a reliable safety net, add a **Stop hook** that fires every time Claude finishes responding.
+
+The server exposes a simple `/notify` REST endpoint alongside the MCP endpoint, so the hook can call it with a single `curl` without needing an MCP session.
+
+First, create the hook script at `~/.claude/hooks/slack-notify-stop.sh`:
+
+```bash
+#!/bin/bash
+INPUT=$(cat)
+
+# Prevent infinite loops
+if [ "$(echo "$INPUT" | jq -r '.stop_hook_active')" = "true" ]; then
+  exit 0
+fi
+
+# Get the last assistant message, fallback to generic
+MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // "Session finished"' | head -c 300)
+
+# Use jq to safely build JSON (handles newlines, quotes, special chars)
+PAYLOAD=$(jq -n --arg m "$MSG" '{
+  message: $m,
+  agentName: "Claude Code",
+  type: "implementation_complete"
+}')
+
+curl -s -X POST http://localhost:50000/notify \
+  -H 'Content-Type: application/json' \
+  -d "$PAYLOAD" \
+  > /dev/null 2>&1
+
+exit 0
+```
+
+Make it executable:
+
+```bash
+chmod +x ~/.claude/hooks/slack-notify-stop.sh
+```
+
+Then register the hook in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/slack-notify-stop.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> **How it works:** When Claude stops, the hook reads `last_assistant_message` from stdin (provided by Claude Code), truncates it to 300 characters, and POSTs it to the `/notify` endpoint. The `stop_hook_active` check prevents infinite loops.
+>
+> **Why not a `prompt` or `agent` hook?** Neither `prompt` nor `agent` type hooks have access to MCP tools. A `command` hook calling the REST endpoint directly is the only reliable approach.
+>
+> **Requires `jq`:** The script uses `jq` to safely handle JSON with special characters. Install it with `brew install jq` (macOS) or `apt install jq` (Linux) if you don't have it.
 
 ### 6. Verify
 
@@ -142,6 +209,26 @@ Send a question via DM and wait for a threaded reply.
 | `agentName` | string | Name of the agent asking |
 | `question` | string | The question to ask |
 | `timeoutSeconds` | number | Timeout waiting for reply (default: 300) |
+
+## REST API
+
+In addition to the MCP protocol, the server exposes a simple REST endpoint for use by hooks and scripts that can't establish an MCP session.
+
+### `POST /notify`
+
+Send a notification without an MCP session.
+
+```bash
+curl -X POST http://localhost:50000/notify \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Task finished", "agentName": "Claude Code", "type": "info"}'
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `message` | string | yes | The notification message |
+| `agentName` | string | no | Name of the sender (default: `"Claude Code"`) |
+| `type` | enum | no | `info` (default), `plan_complete`, or `implementation_complete` |
 
 ## Running as a Background Service (macOS)
 
