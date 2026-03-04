@@ -1,0 +1,9 @@
+services:
+  slack-notifier:
+    build: .
+    ports:
+      - "50000:50000"
+    environment:
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_USER_ID=${SLACK_USER_ID}
+    restart: unless-stopped
